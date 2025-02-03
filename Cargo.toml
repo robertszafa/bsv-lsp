@@ -1,0 +1,12 @@
+[package]
+name = "bsv-lsp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tower-lsp = "0.20.0"
+tokio = { version = "1.17.0", features = ["full"] }
+serde = "1.0.217"
+serde_json = "1.0.138"
+tracing-subscriber = "0.3.19"
+
