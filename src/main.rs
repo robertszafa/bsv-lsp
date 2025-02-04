@@ -1,12 +1,9 @@
-// use std::fs;
-// use std::io::Write;
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-// To run the bsc compiler.
-use std::process::Command;
+mod bsv_lang_server;
 
 #[derive(Debug)]
 struct Backend {
@@ -88,7 +85,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        if let Some(diagnostics) = self.collect_diagnostics(&params.text_document) {
+        if let Some(diagnostics) = bsv_lang_server::collect_diagnostics(&params.text_document.uri) {
             self.client
                 .publish_diagnostics(params.text_document.uri, diagnostics, Option::None)
                 .await;
@@ -106,15 +103,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        let doc_item = TextDocumentItem {
-            uri: params.text_document.uri,
-            text: String::from(""),
-            version: 1,
-            language_id: String::from("bsv"),
-        };
-        if let Some(diagnostics) = self.collect_diagnostics(&doc_item) {
+        if let Some(diagnostics) = bsv_lang_server::collect_diagnostics(&params.text_document.uri) {
             self.client
-                .publish_diagnostics(doc_item.uri, diagnostics, Option::None)
+                .publish_diagnostics(params.text_document.uri, diagnostics, Option::None)
                 .await;
         } else {
             self.client
@@ -134,116 +125,6 @@ impl LanguageServer for Backend {
             CompletionItem::new_simple("Hello".to_string(), "Some detail".to_string()),
             CompletionItem::new_simple("Bye".to_string(), "More detail".to_string()),
         ])))
-    }
-}
-
-impl Backend {
-    /// Construct Diagnostic object.
-    fn create_diagnostics(
-        &self,
-        line: u32,
-        col: u32,
-        severity: DiagnosticSeverity,
-        msg: String,
-    ) -> Diagnostic {
-        let diag_range = Range::new(
-            Position {
-                line,
-                character: col,
-            },
-            Position {
-                line,
-                character: col,
-            },
-        );
-        Diagnostic {
-            range: diag_range,
-            severity: Some(severity),
-            message: msg,
-            ..Diagnostic::default()
-        }
-    }
-
-    /// Given a bsc error/warning string, return the line number.
-    ///     Example line error: Error: "Top.bsv", line 98, column 3: (P0005)
-    fn get_line_nr(&self, diagnostic_msg: &str) -> Option<u32> {
-        let (_, line_substr) = diagnostic_msg.split_once(", line ")?;
-        let (line_str, _) = line_substr.split_once(",")?;
-        let line = line_str.parse::<u32>().ok()?;
-        Some(line - 1)
-    }
-
-    /// Given a bsc error/warning string, return the column/character number.
-    ///     Example line error: Error: "Top.bsv", line 98, column 3: (P0005)
-    fn get_column_nr(&self, diagnostic_msg: &str) -> Option<u32> {
-        let (_, col_substr) = diagnostic_msg.split_once(", column ")?;
-        let (col_str, _) = col_substr.split_once(":")?;
-        let col = col_str.parse::<u32>().ok()?;
-        Some(col - 1)
-    }
-
-    fn try_bsc_compile(&self, fname: &str) -> Option<String> {
-        let bsc_out = Command::new("bsc")
-            .arg("-sim") // To get more diagnostics, e.g., rule conflicts
-            .arg(fname)
-            .output()
-            .ok()?;
-        Some(String::from_utf8_lossy(&bsc_out.stderr).to_string())
-    }
-
-    /// Given a bluespec text decoumnt 'fname', compile it with 'bsc -sim fname',
-    /// and return the diagnostics from bsc.
-    fn collect_diagnostics(&self, params: &TextDocumentItem) -> Option<Vec<Diagnostic>> {
-        let fname = params.uri.path();
-        let bsc_out = self.try_bsc_compile(fname)?;
-        // let fcontents = fs::read_to_string(fname).expect("to read {fname}.");
-
-        // Go through all lines outputted by bsc and collect all diagnostics.
-        let mut diagnostics: Vec<Diagnostic> = Vec::new();
-        let mut curr_diag_msg = String::new();
-        let mut curr_diag_line_nr = 0;
-        let mut curr_diag_col_nr = 0;
-        let mut curr_diag_severity = DiagnosticSeverity::ERROR;
-        for line in bsc_out.lines() {
-            // If we start a new diagnostic, then push any prev diagnostic to our vector.
-            let is_start_of_new_diag = line.contains("Error: ") || line.contains("Warning: ");
-            if is_start_of_new_diag && !curr_diag_msg.is_empty() {
-                diagnostics.push(self.create_diagnostics(
-                    curr_diag_line_nr,
-                    curr_diag_col_nr,
-                    curr_diag_severity,
-                    curr_diag_msg.clone(),
-                ));
-            }
-
-            // Update info about next diag, if this is its start. Else collect msg body of existing.
-            if is_start_of_new_diag {
-                curr_diag_severity = if line.contains("Error: ") {
-                    DiagnosticSeverity::ERROR
-                } else {
-                    DiagnosticSeverity::WARNING
-                };
-                curr_diag_msg.clear();
-                curr_diag_line_nr = self.get_line_nr(line).unwrap_or(0);
-                curr_diag_col_nr = self.get_column_nr(line).unwrap_or(0);
-            } else {
-                // Body of diagnostic message.
-                curr_diag_msg.push_str(line.trim_start());
-                curr_diag_msg.push(' ');
-            }
-        }
-
-        // Final diagnostic.
-        if !curr_diag_msg.is_empty() {
-            diagnostics.push(self.create_diagnostics(
-                curr_diag_line_nr,
-                curr_diag_col_nr,
-                curr_diag_severity,
-                curr_diag_msg,
-            ));
-        }
-
-        Some(diagnostics)
     }
 }
 
